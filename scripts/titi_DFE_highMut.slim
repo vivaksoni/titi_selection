@@ -1,0 +1,85 @@
+/// # Gravel Model in SLiM
+/// #### _(with Jump Menu annotations)_
+///
+
+initialize() {
+	initializeSLiMOptions(keepPedigrees=T);
+	initializeTreeSeq();
+	defineGlobal("start", clock());
+	defineConstant("scale", d_scale);
+	defineConstant("Nancestral", asInteger(17807/scale));
+	defineConstant("N", Nancestral);
+	defineConstant("N2", asInteger(34933.5/scale));
+	defineConstant("N1", asInteger(424862.5/scale));
+	defineConstant("Ncurrent", asInteger(6330/scale));
+	defineConstant("burnin", asInteger(10 * Nancestral));
+	defineConstant("divergence_time", asInteger(d_div/6)+burnin);
+	defineConstant("simEnd", asInteger(divergence_time + (122126/scale))); //Burnin + divergence phase + oldest event time
+	defineConstant("t_N2", asInteger(simEnd - (122126/scale))); //This is t3, occurring 122,126 gens ago
+	defineConstant("t_N1", asInteger(simEnd - (55881/scale))); //This is t2, occurring 55,881 gens ago
+	defineConstant("t_Ncurrent", asInteger(simEnd - (1406/scale))); //This is t1, occurring 1,406 gens ago
+	//Chromosome with 33 genes, each comprised of 9 130bp exons, 8 1591bp introns, and separated by a 16489bp intergenic region
+	//Total chromosome length: 91161
+	defineConstant("exonLength", 618);
+	initializeMutationRate(d_mu*scale);
+	
+	
+	// mutation types:
+	//2Nes = [0, -1, -10, -100, -10000], s = [0.0, -0.0001, -0.001, -0.01, -1]\
+	initializeMutationType("m1", 0.5, "s", "return runif(1, -1/(N*2), -0/(N*2));"); //weakly deleterious (1<2Nes<10)
+	initializeMutationType("m2", 0.5, "s", "return runif(1, -10/(N*2), -1/(N*2));"); //weakly deleterious (1<2Nes<10)
+	initializeMutationType("m3", 0.5, "s", "return runif(1, -100/(N*2), -10/(N*2));"); //moderately deleterious (10<2Nes<100)
+	initializeMutationType("m4", 0.5, "s", "return runif(1, -1000/(N*2), -100/(N*2));"); //strongly deleterious (100<2Nes<1000)
+	// Genomic elements:
+	initializeGenomicElementType("g1", c(m1, m2, m3, m4), c(d_f0, d_f1, d_f2, d_f3)); //exon
+	initializeGenomicElement(g1, 0, exonLength);
+	
+	initializeRecombinationRate(d_r * scale);
+}
+
+///
+/// **Demography:**
+
+1 early() /* create p1 */ {
+	sim.addSubpop("p1", Nancestral);
+	community.rescheduleScriptBlock(s1, start=t_N2, end=t_N2);
+	community.rescheduleScriptBlock(s2, start=t_N1, end=t_N1);
+	community.rescheduleScriptBlock(s3, start=t_Ncurrent, end=t_Ncurrent);
+	community.rescheduleScriptBlock(s6, start=simEnd, end=simEnd);
+}
+
+s1 late() /* end divergence time */ {
+    print('Generation ' + sim.cycle + ': Burnin Finished, First Size Change.');;
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	p1.setSubpopulationSize(N2);
+}
+
+s2 late() /* 2nd size change */ {
+    print('Generation ' + sim.cycle + ': Second Size Change.');
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	p1.setSubpopulationSize(N1);
+}
+
+s3 late() /* 3rd size change */ {
+    print('Generation ' + sim.cycle + ': Final Size Change.');
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	p1.setSubpopulationSize(Ncurrent);
+}
+
+
+/***/
+/** **Final output:** */
+
+s6 late() {
+	print('Generation ' + sim.cycle + ': Simulation Finished. Runtime: ' + (clock()-start));
+	p1.outputVCFSample(6, F, "*", filePath=d_folder + "/" + d_simID + "_rep" + d_repID + ".vcf");
+	//sim.treeSeqOutput(d_folder + "/" + d_simID + "_rep" + d_repID + ".trees");
+    //p1.outputMSSample(100, F, "*", d_folder + "/" + d_simID + "_rep" + d_repID + ".ms", F);
+    //print all fixed mutations
+    sim.outputFixedMutations(d_folder + "/" + d_simID + "_rep" + d_repID + ".fixed", append=F);
+
+}
+

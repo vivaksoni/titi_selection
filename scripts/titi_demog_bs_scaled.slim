@@ -1,0 +1,211 @@
+/// # Gravel Model in SLiM
+/// #### _(with Jump Menu annotations)_
+///
+
+initialize() {
+	initializeSLiMOptions(keepPedigrees=T);
+	initializeTreeSeq();
+	defineGlobal("start", clock());
+	defineConstant("Feq", 0.5);
+	defineConstant("Nancestral", 1781);
+	defineConstant("N", Nancestral);
+	defineConstant("Ts", asInteger(d_Ts*Nancestral)); //Time of sweep intro
+	defineConstant("N2", 3493);
+	defineConstant("N1", 42486);
+	defineConstant("Ncurrent", 633);
+	defineConstant("burnin", asInteger(10 * Nancestral));
+	defineConstant("b_seg", asInteger(d_Ts * Nancestral));
+	defineConstant("simEnd", asInteger(burnin + (b_seg - 12213))); //Burnin + oldest event time
+	defineConstant("t_N2", simEnd - 12213); //This is t3, occurring 351,168 gens ago
+	defineConstant("t_N1", asInteger(simEnd - 5588)); //This is t2, occurring 131,015 gens ago
+	defineConstant("t_Ncurrent", asInteger(simEnd - 141)); //This is t1, occurring 3,160 gens ago 
+	//Chromosome with 33 genes, each comprised of 9 130bp exons, 8 1591bp introns, and separated by a 16489bp intergenic region
+	//Total chromosome length: 91161
+	defineConstant("exonLength", 130);
+	defineConstant("exonsPerGene", 9); 
+	defineConstant("intronsPerGene", 8); 
+	defineConstant("intronLength", 1591);
+	defineConstant("geneLength", (exonLength * exonsPerGene) + (intronLength * intronsPerGene));
+	defineConstant("intergenicLength", 16489); 
+	defineConstant("totalGenes", 33);
+	
+	
+	//MUTATION RATE//
+	//fixed recombination rate (Nachman and Crowell 2000 average)
+	if (d_mu_map=='fixed')
+	{
+		mu = 1.7e-7;
+		initializeMutationRate(mu);
+	}
+	//variable rate (from input file)
+	else
+	{
+		lines = readFile(d_mu_map);
+		mu = NULL;
+		coords = NULL;
+		for (line in lines)
+		{
+			components = strsplit(line,"\t");
+			coords = c(coords, asInteger(components[0]));
+			mu = c(mu, asFloat(components[1]));
+		}
+		coords = c(coords[1:(size(coords)-1)] - 1, 1002771);
+		initializeMutationRate(mu, coords);
+	}
+	
+	// mutation types:
+	//2Nes = [0, -1, -10, -100, -10000], s = [0.0, -0.0001, -0.001, -0.01, -1]
+	initializeMutationType("m1", 0.5, "s", "return runif(1, -1/(N*2), 0/(N*2));"); //weakly deleterious (0<2Nes<1)
+	initializeMutationType("m2", 0.5, "s", "return runif(1, -10/(N*2), -1/(N*2));"); //weakly deleterious (1<2Nes<10)
+	initializeMutationType("m3", 0.5, "s", "return runif(1, -100/(N*2), -10/(N*2));"); //moderately deleterious (10<2Nes<100)
+	initializeMutationType("m4", 0.5, "s", "return runif(1, -1000/(N*2), -100/(N*2));"); //strongly deleterious (100<2Nes<1000)
+	// Genomic elements:
+	initializeGenomicElementType("g1", m1, 1.0); //intergenic
+	initializeGenomicElementType("g2", m1, 1.0); //intron
+	//initializeGenomicElementType("g3", c(m2, m3, m4), c(0.6, 0.4, 0)); //exon
+	initializeGenomicElementType("g3", c(m1, m2, m3, m4), c(0.6,0.2,0.2,0)); //exon
+	//initializeGenomicElementType("g4", m1, 1.0); //exon synonymous
+	initializeMutationType("m0", 0.5, "f", 1000/(N*2));
+	
+	//Initialise genomic element
+	//Chromosome with {totalGenes} no. ofgenes, each comprised of {exonsPerGene} {exonLength}bp exons;
+	//{intronsPerGene} {intronLength}bp introns, and separated by a {intergenicLength}bp intergenic region
+	//Loop through number of genes
+	for (gene in 1:totalGenes)
+	{
+		//Set gene start
+		geneStart = (gene-1) * (geneLength+intergenicLength) + 1;
+		//Loop through elements within gene (ie number of exons)
+		for (element in 1:exonsPerGene)
+		{
+			//Set exonStart and end coordinates
+			exonStart = geneStart + (exonLength * (element-1)) + (intronLength * (element-1));
+			exonEnd = exonStart+(exonLength-1);
+			initializeGenomicElement(g3, exonStart, exonEnd);
+
+			//Each gene contains one less intron than exons
+			if (element < exonsPerGene)
+			{
+				//Set intron coordinates
+				intronStart = exonStart + exonLength;
+				intronEnd = intronStart+(intronLength-1);
+				initializeGenomicElement(g2, intronStart, intronEnd);
+			}
+		}
+		//Set intergenic region coordinates
+		intergenicStart = exonEnd + 1;
+		intergenicEnd = intergenicStart + (intergenicLength-1);
+		initializeGenomicElement(g1, intergenicStart, intergenicEnd);
+	}
+	
+	
+	//RECOMBINATION RATE//
+	//fixed recombination rate (Payseur and Nachman 2000).
+	if (d_rr_map=='fixed')
+	{
+		rr = 1e-7;
+		initializeRecombinationRate(rr);
+	}
+	//variable rate (from input file - already adjusted for sex-average rate)
+	else
+	{
+		lines = readFile(d_rr_map);
+		rr = NULL;
+		coords = NULL;
+		for (line in lines)
+		{
+			components = strsplit(line,"\t");
+			coords = c(coords, asInteger(components[0]));
+			rr = c(rr, asFloat(components[1]));
+		}
+		coords = c(coords[1:(size(coords)-1)] - 1, 1002771);
+		initializeRecombinationRate(rr, coords);
+	}
+
+}
+
+///
+/// **Demography:**
+
+1 early() /* create p1 */ {
+	sim.addSubpop("p1", Nancestral);
+	community.rescheduleScriptBlock(s1, start=burnin, end=burnin);
+	community.rescheduleScriptBlock(s2, start=burnin, end=simEnd);
+	community.rescheduleScriptBlock(s3, start=t_N2, end=t_N2);
+	community.rescheduleScriptBlock(s4, start=t_N1, end=t_N1);
+	community.rescheduleScriptBlock(s5, start=t_Ncurrent, end=t_Ncurrent);
+	community.rescheduleScriptBlock(s6, start=simEnd, end=simEnd);
+}
+
+s1 late() /* end burn-in */ {
+    print('Generation ' + sim.cycle + ': Burnin Finished, Balanced mutation introduced.');;
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	// introduce the sweep mutation
+	target = sample(p1.genomes, 1);
+	target.addNewDrawnMutation(m0, 500026);	
+	// save the state of the simulation
+	sim.treeSeqOutput("states/slim_" + d_repID + ".trees");
+}
+
+mutationEffect(m0) {
+        if(sim.mutationFrequencies(p1, mut) < Feq)
+                return ((1 + Feq) - sim.mutationFrequencies(p1, mut) * (1 + mut.selectionCoeff));
+        else if(sim.mutationFrequencies(p1, mut) >= Feq)
+                return ((1 + Feq) - sim.mutationFrequencies(subpop, mut) * (1 - mut.selectionCoeff));
+}
+
+
+s2 late(){
+	mut = sim.mutationsOfType(m0);
+	if (size(mut) == 0)
+	{
+		cat(d_repID + ": LOST - RESTARTING\n");
+		//writeFile(d_folder + "/slim_" + d_repID + ".lost", "1", append=T);
+		// go back to tick 1000
+		sim.readFromPopulationFile("states/slim_" + d_repID + ".trees");
+		
+		// start a newly seeded run
+		setSeed(rdunif(1, 0, asInteger(2^62) - 1));
+		
+		// re-introduce the sweep mutation
+		target = sample(p1.genomes, 1);
+		target.addNewDrawnMutation(m0, 500026);
+	}
+}
+
+s3 late() /* first size chnge */ {
+    print('Generation ' + sim.cycle + ': First Size Change.');;
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	p1.setSubpopulationSize(N2);
+}
+
+s4 late() /* 2nd size change */ {
+    print('Generation ' + sim.cycle + ': Second Size Change.');
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	p1.setSubpopulationSize(N1);
+}
+
+s5 late() /* 3rd size change */ {
+    print('Generation ' + sim.cycle + ': Final Size Change.');
+	 print("Runtime: " + (clock()-start));
+	 print('--------------------------------------------------------------');
+	p1.setSubpopulationSize(Ncurrent);
+}
+
+
+/***/
+/** **Final output:** */
+
+s6 late() {
+	print('Generation ' + sim.cycle + ': Simulation Finished. Runtime: ' + (clock()-start));
+	p1.outputVCFSample(6, F, "*", filePath=d_folder + "/" + d_Ts + "_" + d_Nes + "_rep" + d_repID + ".vcf");
+    //p1.outputMSSample(100, F, "*", d_folder + "/" + d_simID + "_rep" + d_repID + ".ms", F);
+    //print all fixed mutations
+    sim.outputFixedMutations(filePath=d_folder + "/" + d_Ts + "_" + d_Nes + "_rep" + d_repID + ".fixed", append=F);
+    m0muts = sim.mutationsOfType(m0);
+	 sim.outputMutations(m0muts, filePath=d_folder + "/" + d_Ts + "_" + d_Nes + "_rep" + d_repID + ".beneficial", append=F); 
+}
+
